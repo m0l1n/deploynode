@@ -131,17 +131,6 @@ def Q_First_Con(i,node):
     while not conOk :
         nodeUser = '\n'
 
-        # while True:
-        #     try:
-        #         line = sys.stdin.readline()
-        #         print('\n')
-        #     except EOFError:
-        #         print('EOF')
-        #         break
-
-        #Ajout du superutilisateur
-        #La boucle est là pour faire du garbage collector sur les retour chario de l'user
-
         while nodeUser == '\n':
             nodeUser = input("SuperUser name on node"+str(i)+" :\n")
         node.add_user(nodeUser)
@@ -155,7 +144,13 @@ def Q_First_Con(i,node):
         print("Initializing SSH Connexion test... Please wait ...")
         if Q_Test_Con_SSH(node.ip,nodeUser,nodePasswd,True,nodePath):
             conOk = True
-
+            #node.add_ssh(node.ip,nodeUser,nodePasswd)
+        try:
+            node.ssh_init('10.0.0.5', 'root')
+        except Exception as e:
+            print('error', e)
+            print('\nProblem while creating ssh object in node')
+       # nodeEth = input(" Number of ethernet interface on node ? ")
     return conOk
 
 def Q_Test_Con_SSH(ip, user, passwd, pushKey, nodePath):
@@ -175,7 +170,7 @@ def Q_Test_Con_SSH(ip, user, passwd, pushKey, nodePath):
     try :
         ssh.connect(ip, username = user, password =passwd)
         print('connexion test at '+ip +' ... Check')
-        ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('echo haha >> /home/debuser/haha')
+        #ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('echo haha >> /home/debuser/haha')
         #haha = Popen(['touch', '/home/debuser', 'haha'], stdout=PIPE)
         if pushKey == True:
             print('Pushing SSHKey on Server...')
@@ -221,6 +216,7 @@ def Q_Push_Key(serv,user,passwd,ssh, nodePath):
                         except Exception as e:
                             print('error', e)
                             print("\n...Problem when writing pubkey on remote host")
+        sftp.close()
 
     except Exception as e:
         print('error', e)
@@ -243,27 +239,23 @@ def Q_Prepping_System(node) :
     -Suricata
     :return:
     '''
-    ssh2 = pxssh.pxssh()
-
     #Recupération de la liste de package a installé et mise au format pour être passé en argument
     #sur une commande apt-get install
     argument = Q_Recup_Packages('package.txt')
     cmd = 'apt-get install -y '+argument
-
     #Suppression de oracle-jdk installé par défaut sur le système
     # et oracle-installer dans la liste de package
     #Toutes nos configurations modifications de fichier de base sur le serveur se feront ici
     try :
-        #ssh.connect(ip, username = node.user)
-        ssh2.login(node.ip,node.user)
+        #ssh2.login(node.ip,node.user)
         print('Connexion at  ' + node.ip + ' for package installation...')
         #INSTALL PACKAGE
-        #Q_Install_Oracle(ssh2)
+        #Q_Install_Oracle(node)
         print("\nInstalling package on node, please wait...")
         try :
             #ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command(cmd)
-            ssh2.sendline(cmd)
-            ssh2.prompt()
+            ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmd)
+            print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
             print("...Package succesfully installed")
         except Exception as e:
             print('error',e)
@@ -275,7 +267,7 @@ def Q_Prepping_System(node) :
 
 
 #MODULES ORACLE INSTALLER OBSOLETE POUR LE MOMENT AVEC LOGSTASH ES 2.X
-def Q_Install_Oracle(ssh) :
+def Q_Install_Oracle(node) :
     pushOracleCmd = ['echo "deb http://ppa.launchpad.net/webupd8team/java/ubuntu precise main" | \
         tee /etc/apt/sources.list.d/webupd8team-java.list',
                      'echo "deb-src http://ppa.launchpad.net/webupd8team/java/ubuntu precise main" | \
@@ -287,9 +279,8 @@ def Q_Install_Oracle(ssh) :
     try :
         print('Installing oracle-java?-installer... Please Wait ...')
         for cmd in pushOracleCmd :
-            ssh.sendline(cmd)
-            # prompt waiting for every command to end
-            ssh.prompt()
+            ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmd)
+            print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
         print('...oracle-java?-installer succesfully installed')
     except Exception as e:
         print('error', e)
@@ -302,27 +293,25 @@ def Q_Update(node):
     '''
     Fais un apt-get update sur le node donné en paramètre
     '''
-    ssh2 = pxssh.pxssh()
     # commande pour ajouter le backport à Sources.list pour l'install sur debian
     cmd = 'apt-get update'
     cmd2 = 'apt-get upgrade -y'
     try:
-        ssh2.login(node.ip, node.user)
         print('Updating at:  ' + node.ip)
         # Updating
         try:
-            ssh2.sendline(cmd)
             print("\nUpdating on node, please wait...")
-            ssh2.prompt()
+            ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmd)
+            print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
             print("...System up to date")
         except Exception as e:
             print('error', e)
             print('\nProblem while updating system')
         #Upgrading
         try:
-            ssh2.sendline(cmd2)
             print("\nUpgrading on node, please wait...")
-            ssh2.prompt()
+            ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmd2)
+            print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
             print("...System upgraded\n")
         except Exception as e:
             print('error', e)
@@ -359,10 +348,9 @@ def Q_Install_Suricata(node):
                      ' /etc/apt/sources.list.d/backports.list && apt-get update'
     #commande pour install suricata à partir du repo jessie nouvellement ajouté
     cmdinstallfromrepo = 'apt-get install -y -t jessie-backports suricata'
-    ssh2 = pxssh.pxssh()
+
     try:
-        # ssh.connect(ip, username = node.user)
-        ssh2.login(node.ip, node.user)
+        #ssh2.login(node.ip, node.user)
         print('\nConnexion at  ' + node.ip + ' for suricata installation...')
         isSet,suriIsIns = Q_Check_Suricata(node)
         # INSTALL Source Backports
@@ -371,10 +359,11 @@ def Q_Install_Suricata(node):
             print (suriIsIns)
         else :
             try:
-                # ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command(cmd)
-                ssh2.sendline(cmdaddbackport)
                 print("\nPushing backport in sources.list, please wait...")
-                ssh2.prompt()
+                ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmdaddbackport)
+                print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
+                #ssh2.sendline(cmdaddbackport)
+                #ssh2.prompt()
                 print("...Done")
             except Exception as e:
                 print('error', e)
@@ -382,10 +371,11 @@ def Q_Install_Suricata(node):
 
             # INSTALL suricata from repo
             try:
-                # ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command(cmd)
-                ssh2.sendline(cmdinstallfromrepo)
                 print("\nInstalling Suricata from repo, please wait...")
-                ssh2.prompt()
+                ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmdinstallfromrepo)
+                print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
+                #ssh2.sendline(cmdinstallfromrepo)
+                #ssh2.prompt()
                 print("...Done")
             except Exception as e:
                 print('error', e)
@@ -409,21 +399,16 @@ def Q_Check_Suricata(node):
     '''
     remoteCmd = 'suricata | head -n1'
     try:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        try:
-            ssh.connect(node.ip, username=node.user)
-            stdin,stdout,stderr = ssh.exec_command(remoteCmd)
-            suriVersion = stdout.read()
-            if 'Suricata' in str(suriVersion):
-                return True, 'Suricata... version : ' + suriVersion.decode("utf-8") + 'at ' + node.ip
-            else:
-                return False, 'Suricata isn\'t installed on system at ' + node.ip
-        except Exception as e:
-            print('Error while heading suricata version...' + str(e))
-            return False, 'Bug on Suricata check'
-    except Exception as e :
-        print("Failed to connect while checking Suricata "+ str(e))
+        stdin,stdout,stderr = node.ssh.exec_command(remoteCmd)
+        suriVersion = stdout.read()
+        if 'Suricata' in str(suriVersion):
+            return True, 'Suricata... version : ' + suriVersion.decode("utf-8") + 'at ' + node.ip
+        else:
+            return False, 'Suricata isn\'t installed on system at ' + node.ip
+    except Exception as e:
+        print('Error while heading suricata version...' + str(e))
+        return False, 'Bug on Suricata check'
+
 
 
 
@@ -431,16 +416,13 @@ def Q_Remote_Command(node,cmd):
     '''
     Exécute la commande cmd sur le node spécifié
     '''
-    ssh2 = pxssh.pxssh()
     # commande pour ajouter le backport à Sources.list pour l'install sur debian
     try:
-        ssh2.login(node.ip, node.user)
         print('Executing'+cmd+' at:  ' + node.ip)
         # Executing command
         try:
-            ssh2.sendline(cmd)
             print("\nDoing stuff, please wait...")
-            ssh2.prompt()
+            ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmd)
             print("\n...Done")
         except Exception as e:
             print('error', e)
@@ -459,11 +441,8 @@ def Q_Push_File(node,pathFileLocal,pathFileRemote):
     :param pathFileRemote: Le chemin ou poser le fichier : ATTENTION le nom du fichier doit
     appartaitre; exemple : /home/myuser/monfichier.txt
     '''
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try :
-        ssh.connect(node.ip,username=node.user)
-        sftp = ssh.open_sftp()
+        sftp = node.ssh.open_sftp()
         try :
             sftp.put(pathFileLocal,pathFileRemote)
         except Exception as e :
@@ -487,12 +466,8 @@ def Q_Disable_Ipv6(node) :
                'net.ipv6.conf.lo.disable_ipv6=1',
                'net.ipv6.conf.eth0.disable_ipv6=1',
                'net.ipv6.conf.eth1.disable_ipv6=1']
-
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        ssh.connect(node.ip,username=node.user)
-        sftp = ssh.open_sftp()
+        sftp = node.ssh.open_sftp()
         print('\nDisabling Ipv6 Support on remote system at : '+node.ip)
         DisIpv6.append(ipv6IsDis)
         try:
@@ -509,7 +484,7 @@ def Q_Disable_Ipv6(node) :
 
     except Exception as e:
         print('Failed to connect to remote host while disabling ipv6 : '+ str(e))
-    ssh.exec_command('sysctl -p')
+    node.ssh.exec_command('sysctl -p')
 
 
 
@@ -534,53 +509,147 @@ def Q_Disable_Service_Local() :
 
 
 #TODO LOGSTASH C PAAAARRRTTTIII
-def Q_Install_Logstash():
+def Q_Install_Logstash(node):
     '''
-
     :return:
     '''
+    depot = "http://packages.elastic.co/logstash/2.3/debian stable main"
     cmdGetKey = 'wget -qO - https://packages.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add -'
     cmdPushRepo = 'echo "deb http://packages.elastic.co/logstash/2.3/debian stable main" \
                    | sudo tee -a /etc/apt/sources.list'
-    cmdInst = ' apt-get update && apt-get install -y elasticsearch'
+    cmdInst = 'apt-get install -y logstash'
+    cmdUpdate = 'apt-get update'
 
-    ssh2 = pxssh.pxssh()
     try:
-        # ssh.connect(ip, username = node.user)
-        ssh2.login(node.ip, node.user)
-        print('\nConnexion at  ' + node.ip + ' for suricata installation...')
+        #ssh2.login(node.ip, node.user)
+        print('\nConnexion at  ' + node.ip + ' for logstash installation...')
         #suriIsIns = Q_Check_Suricata(node, ssh2)
         # RECUPERATING GPG KEY
-
+        try:
+            print("\nRecuperating GPG Key, please wait...")
+            ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmdGetKey)
+            print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
+            #ssh2.sendline(cmdGetKey)
+            #ssh2.prompt()
+            print("...Done")
+        except Exception as e:
+            print('error', e)
+            print('\nProblem while Recuperating key')
         # INSTALL Source Backports
         try:
-            # ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command(cmd)
-            #ssh2.sendline(cmdaddbackport)
-            print("\nPushing backport in sources.list, please wait...")
-            ssh2.prompt()
+            print("\nPushing Repository in sources.list, please wait...")
+            try:
+                sftp = node.ssh.open_sftp()
+                try:
+                    with sftp.open('/etc/apt/sources.list') as f:
+                        if depot in f.read().decode("utf-8"):
+                            print('...Repo already pushed in sources.list')
+                        else:
+                            ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmdPushRepo)
+                            print("Repo pushed in sources.list")
+                            print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
+                except Exception as e:
+                    print('Error while checking sources.list on remote host :' + str(e))
+
+            except Exception as e:
+                print('Failed to connect to remote host while disabling ipv6 : ' + str(e))
+
+            #ssh2.sendline(cmdPushRepo)
+            #ssh2.prompt()
             print("...Done")
         except Exception as e:
             print('error', e)
             print('\nProblem while adding backport to sources.list')
 
-        # INSTALL suricata from repo
+        # try:
+        #     # ssh2.sendline('ls -l')
+        #     print("Updating due to new depot")
+        #     stdin, stdout, stderr = node.ssh.exec_command(cmdUpdate)
+        #     print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
+        # except Exception as e:
+        #     print('error', e)
+        #     print('\nProblem while installing Logstash')
+
+        # INSTALL logstash from repo
         try:
-            # ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command(cmd)
-            #ssh2.sendline(cmdinstallfromrepo)
-            print("\nInstalling Suricata from repo, please wait...")
-            ssh2.prompt()
+            #ssh2.sendline('ls -l')
+            print("Installing Logstash from repo, please wait...")
+
+            #ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command('rm /var/lib/dpkg/lock')
+            #print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
+
+            #ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command('rm /var/cache/apt/archives/lock')
+            ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command('apt-get update &&'+cmdInst)
+            print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
+            #print(stdout.read().decode('utf-8'))
+            print(stderr.read().decode('utf-8'))
+            #ssh2.prompt()
             print("...Done")
         except Exception as e:
             print('error', e)
-            print('\nProblem while installing suricata')
+            print('\nProblem while installing Logstash')
+
+
+
 
     except Exception as e:
         print('error', e)
-        print("\nProblem while connecting to ssh for package installation")
+        print("\nProblem while connecting to ssh for logstash installation")
     # Vérification que Suricata est installé : On peut faire une gestion d'erreur si
     # l'install a échoué avec le isSet à True si réussi et False si non
     #isSet, suriInstall = Q_Check_Suricata()
     #print(suriInstall)
+
+
+def Q_Recup_Cert(node):
+    '''
+    Récupère le certificat SSL du serveur central et l'installe.
+    à voir si on utilise le module ou non
+    :param node:
+    :return:
+    '''
+    remotepath = '/etc/logstash/cert'
+    while 1:
+        Rep = input('Do you need to push a certificate on the node ? (Y/n)')
+        if Rep.lower() in ('y','yes') :
+            try:
+                sftp = node.ssh.open_sftp()
+            except Exception as e:
+                print('Error:' + str(e))
+
+            print('Creating '+remotepath+'... at '+node.ip)
+            if sftp.chdir(remotepath) :
+                print('Directory already exist...')
+            else :
+                try :
+                    sftp.mkdir(remotepath)
+                except Exception as e:
+                    print("Error on creating /etc/logstash/cert")
+            while 1 :
+                localpath = input('\nEnter certificate file on local host:')
+                if os.path.isfile(localpath):
+                    sftp.put(localpath,remotepath+'server.pem')
+                    # todo ssh.exec_command('sysctl -p') application de la conf à décommenter
+                    break
+                else :
+                    print('...No file found there')
+            break
+        else :
+            Rep.lower() in ('n','no')
+            break
+
+
+def Q_Changement_Nom_Sonde(node):
+    '''
+    à voir mais en théorie le nom de changement de sonde se fait sur
+    le fichier logstash.conf donc autant le push directement
+    :param node:
+    :return:
+    '''
+
+def Q_Configuration_Sonde(node):
+
+    return 1
 
 if __name__ == '__main__':
 
@@ -601,6 +670,7 @@ if __name__ == '__main__':
         #print (n.user)
         n = node.Node(i)
         Q_First_Con(i,n)
+        stdin, stdout, stderr = n.ssh.exec_command('echo "haha" >> haha.txt')
         nodeS.append(n)
 
     #Préparer le système sur nos nodes (les paquets de base)
@@ -609,6 +679,7 @@ if __name__ == '__main__':
         Q_Update(nodeS[i])
         Q_Disable_Ipv6(nodeS[i])
         Q_Install_Suricata(nodeS[i])
+        Q_Install_Logstash(nodeS[i])
 
     #Q_Preppin_System()
 
