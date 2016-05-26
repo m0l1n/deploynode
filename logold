@@ -1,0 +1,24 @@
+input {
+  file { 
+    path => ["/var/log/suricata/eve.json"]
+    #sincedb_path => ["/var/lib/logstash/"]
+    sincedb_path => ["/var/cache/logstash/sincedbs/since.db"]
+    codec =>   json 
+    #type => sondeNameToReplace 
+  }
+}
+
+
+output { 
+  elasticsearch {
+    #host => HostNameToReplace
+    protocol => http
+    port => 9000
+    ssl => true
+    cacert => "/etc/logstash/cert/server.pem"
+    ssl_certificate_verification => true
+    #user => UserNameToReplace
+    #password => PasswordToReplace
+  }
+}
+

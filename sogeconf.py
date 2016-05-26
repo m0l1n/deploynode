@@ -16,16 +16,18 @@ import getpass
 from pexpect import pxssh
 # import pexpect
 # from time import sleep
-# import sys
+import sys
 # import select
 # import tty
 # import termios
-# import re
+import re
+import argparse
 # import socket
 # import time
 
 #CLass
 import node
+import server
 
 
 '''
@@ -74,6 +76,15 @@ Q_Disable_Ipv6 :
 
 Q_Disable_Service_Local :
     -Désactive logstash et suricata sur le serveur local (selks)
+
+Q_Install_Logstash:
+    -Installe logstash
+
+Q_Check_Logstash:
+    -Check si logstash est installé et sa version
+
+Q_Push_Certificate:
+    -Push le certificat du serveur (pour l'histoire du tls )
 '''
 
 def Q_Key_Gen(path) :
@@ -111,7 +122,7 @@ def Q_Creation_Node():
             int(nombreNode)
             print("\nNumber of node to configure: " + str(nombreNode))
             yes = input("Are you sure ?  y(es): ")
-            if yes.lower() in ('y','yes') :
+            if yes.lower() in ('y','yes','o','oui') :
                 nodeOk = True
                 print("\nConfiguring " + str(nombreNode)+" nodes...")
         except ValueError:
@@ -119,21 +130,33 @@ def Q_Creation_Node():
     return int(nombreNode)
 
 
-def Q_First_Con(i,node):
+def Q_First_Con(i,node,full):
     '''
+    full == true  : pousse la clé ssh sur le serveur
     Création de node
     i : notre numéro de node
     node : notre node à initialiser
     '''
+    validIP = "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}" \
+              "([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
     print("\n----- Setting up node " + str(i) + " ----- \n")
     #Ajout du superutilisateur
     conOk = False
     while not conOk :
-        nodeUser = '\n'
+        #nodeUser = '\n'
+        nodeIp ='\n'
+        while nodeIp == '\n':
+            nodeIp = input("IP address of node" + str(i) + " :\n")
+            if re.search(validIP,nodeIp) :
+                print('Adresse Ip Ok')
+            else :
+                print('Adress ip not ok ...')
+                nodeIp = '\n'
+        node.add_ip(nodeIp)
 
-        while nodeUser == '\n':
-            nodeUser = input("SuperUser name on node"+str(i)+" :\n")
+        nodeUser = input("SuperUser name on node"+str(i)+" :\n")
         node.add_user(nodeUser)
+
         #Le chemin ou se trouve notre clé publique
         nodePath = '/root/.ssh/id_rsa.pub'
         node.add_path(nodePath)
@@ -142,15 +165,25 @@ def Q_First_Con(i,node):
         node.add_passw(nodePasswd)
 
         print("Initializing SSH Connexion test... Please wait ...")
-        if Q_Test_Con_SSH(node.ip,nodeUser,nodePasswd,True,nodePath):
-            conOk = True
-            #node.add_ssh(node.ip,nodeUser,nodePasswd)
+        if full:
+            if Q_Test_Con_SSH(node.ip,nodeUser,nodePasswd,True,nodePath):
+                conOk = True
+                #node.add_ssh(node.ip,nodeUser,nodePasswd)
+        else :
+            if Q_Test_Con_SSH(node.ip, nodeUser, nodePasswd, False, nodePath):
+                conOk = True
+                # node.add_ssh(node.ip,nodeUser,nodePasswd)
         try:
-            node.ssh_init('10.0.0.5', 'root')
+            node.ssh_init(node.ip, node.user)
         except Exception as e:
             print('error', e)
             print('\nProblem while creating ssh object in node')
-       # nodeEth = input(" Number of ethernet interface on node ? ")
+    #Le nombre de carte ethernet pour la configuration
+    nodeEth = input(" Number of ethernet interface on node ? ")
+    node.add_eth(nodeEth)
+    #Rajouter le formulaire pour le nom de la sonde etc
+
+
     return conOk
 
 def Q_Test_Con_SSH(ip, user, passwd, pushKey, nodePath):
@@ -488,25 +521,6 @@ def Q_Disable_Ipv6(node) :
 
 
 
-def Q_Disable_Service_Local() :
-    '''
-    Désactive les services locaux dont on a pas besoin ( logstash et suricata )
-    :return:
-
-    Peut se transformer en code pour supprimer tout les services qu'on ne veut pas
-    à partir d'un fichier "service.txt" (comme pour package)... A voir :)
-    '''
-    suitecmd =['service logstash stop',
-               'service suricata stop',
-               'update-rc.d logstash disable',
-               'update-rc.d suricata disable']
-    for cmd in suitecmd:
-        unservlog = Popen(cmd,stdout = PIPE)
-        stdout = unservlog.communicate()[0]
-        if unservlog.returncode != 0 :
-            print(' Error while stopping Service')
-
-
 
 #TODO LOGSTASH C PAAAARRRTTTIII
 def Q_Install_Logstash(node):
@@ -523,120 +537,447 @@ def Q_Install_Logstash(node):
     try:
         #ssh2.login(node.ip, node.user)
         print('\nConnexion at  ' + node.ip + ' for logstash installation...')
-        #suriIsIns = Q_Check_Suricata(node, ssh2)
-        # RECUPERATING GPG KEY
-        try:
-            print("\nRecuperating GPG Key, please wait...")
-            ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmdGetKey)
-            print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
-            #ssh2.sendline(cmdGetKey)
-            #ssh2.prompt()
-            print("...Done")
-        except Exception as e:
-            print('error', e)
-            print('\nProblem while Recuperating key')
-        # INSTALL Source Backports
-        try:
-            print("\nPushing Repository in sources.list, please wait...")
+        isSet, logstashIsIns = Q_Check_Logstash(node)
+        if isSet:
+            print("Logstash is already installed...")
+            print(logstashIsIns)
+        else :
+            # RECUPERATING GPG KEY
             try:
-                sftp = node.ssh.open_sftp()
-                try:
-                    with sftp.open('/etc/apt/sources.list') as f:
-                        if depot in f.read().decode("utf-8"):
-                            print('...Repo already pushed in sources.list')
-                        else:
-                            ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmdPushRepo)
-                            print("Repo pushed in sources.list")
-                            print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
-                except Exception as e:
-                    print('Error while checking sources.list on remote host :' + str(e))
-
+                print("\nRecuperating GPG Key, please wait...")
+                ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmdGetKey)
+                print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
+                #ssh2.sendline(cmdGetKey)
+                #ssh2.prompt()
+                print("...Done")
             except Exception as e:
-                print('Failed to connect to remote host while disabling ipv6 : ' + str(e))
+                print('error', e)
+                print('\nProblem while Recuperating key')
+            # INSTALL Source Backports
+            try:
+                print("\nPushing Repository in sources.list, please wait...")
+                try:
+                    sftp = node.ssh.open_sftp()
+                    try:
+                        with sftp.open('/etc/apt/sources.list') as f:
+                            if depot in f.read().decode("utf-8"):
+                                print('...Repo already pushed in sources.list')
+                            else:
+                                ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmdPushRepo)
+                                print("Repo pushed in sources.list")
+                                print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
+                    except Exception as e:
+                        print('Error while checking sources.list on remote host :' + str(e))
 
-            #ssh2.sendline(cmdPushRepo)
-            #ssh2.prompt()
-            print("...Done")
-        except Exception as e:
-            print('error', e)
-            print('\nProblem while adding backport to sources.list')
+                except Exception as e:
+                    print('Failed to connect to remote host while disabling ipv6 : ' + str(e))
 
-        # try:
-        #     # ssh2.sendline('ls -l')
-        #     print("Updating due to new depot")
-        #     stdin, stdout, stderr = node.ssh.exec_command(cmdUpdate)
-        #     print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
-        # except Exception as e:
-        #     print('error', e)
-        #     print('\nProblem while installing Logstash')
+                #ssh2.sendline(cmdPushRepo)
+                #ssh2.prompt()
+                print("...Done")
+            except Exception as e:
+                print('error', e)
+                print('\nProblem while adding backport to sources.list')
 
-        # INSTALL logstash from repo
-        try:
-            #ssh2.sendline('ls -l')
-            print("Installing Logstash from repo, please wait...")
+            # INSTALL logstash from repo
+            try:
+                #ssh2.sendline('ls -l')
+                print("Installing Logstash from repo, please wait...")
 
-            #ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command('rm /var/lib/dpkg/lock')
-            #print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
+                #ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command('rm /var/lib/dpkg/lock')
+                #print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
 
-            #ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command('rm /var/cache/apt/archives/lock')
-            ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command('apt-get update &&'+cmdInst)
-            print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
-            #print(stdout.read().decode('utf-8'))
-            print(stderr.read().decode('utf-8'))
-            #ssh2.prompt()
-            print("...Done")
-        except Exception as e:
-            print('error', e)
-            print('\nProblem while installing Logstash')
-
-
-
+                #ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command('rm /var/cache/apt/archives/lock')
+                ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command('apt-get update &&'+cmdInst)
+                print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
+                #print(stdout.read().decode('utf-8'))
+                print(ssh_stderr.read().decode('utf-8'))
+                #ssh2.prompt()
+                print("...Done")
+            except Exception as e:
+                print('error', e)
+                print('\nProblem while installing Logstash')
+            isSet, logstashIsIns = Q_Check_Logstash(node)
+            print(logstashIsIns)
 
     except Exception as e:
         print('error', e)
         print("\nProblem while connecting to ssh for logstash installation")
-    # Vérification que Suricata est installé : On peut faire une gestion d'erreur si
+    # Vérification que Logstash est installé : On peut faire une gestion d'erreur si
     # l'install a échoué avec le isSet à True si réussi et False si non
-    #isSet, suriInstall = Q_Check_Suricata()
-    #print(suriInstall)
+    #isSet, logstashInstall = Q_Check_Logstash()
+
+def Q_Check_Logstash(node):
+    '''
+    Vérifie que Logstash est bien installé sur le serveur
+    :param node: La node sur lequel on vérifie l'install
+    :return: retourne True si Logstash est installé
+    '''
+    remoteCmd = '/opt/logstash/bin/logstash -V'
+    try:
+        print('Checking if logstash is already installed (can take some times with few RAM)...')
+        stdin,stdout,stderr = node.ssh.exec_command(remoteCmd)
+        print("exit:" + str(stdout.channel.recv_exit_status()))
+        logstashVersion = stdout.read()
+        if 'logstash' in str(logstashVersion):
+            return True, 'Logstash... version : ' + logstashVersion.decode("utf-8") + 'at ' + node.ip
+        else:
+            return False, 'Logstash isn\'t installed on system at ' + node.ip
+    except Exception as e:
+        print('Error while heading Logstash version...' + str(e))
+        return False, 'Bug on Logstash check'
 
 
-def Q_Recup_Cert(node):
+def Q_Configuration_Logstash(node):
+    '''
+    Ici on va push le fichier logstash.conf modifié pour chaque sonde sur notre serveur
+
+    :param node:
+    :return:
+    '''
+    QueryType = '#type => sondeNameToReplace'
+    QueryName = '#user => UserNameToReplace'
+    QueryPassword = '#password => PasswordToReplace'
+    try:
+        stdin = Popen(['touch', 'logstash.conf'], stdout=PIPE)
+        stdout = stdin.communicate()[0]
+        with open('logstash.conf', 'w') as fileToWrite:
+            with open('oldlogstash.conf', 'r') as fileToRead:
+                # Ici disctuter de la méthode la plus propre enbtre faire un re.match et re.remplace
+                # ou parcourir le fichier line by line, et modifier en fonction :p
+                # oldfile = file.read()
+                fileData = fileToRead.read()
+                fileData = fileData.replace(QueryPassword, '#password => NewPasswordToReplace')
+                fileData = fileData.replace(QueryName, '#user => NewUSerNameToReplace')
+                fileData = fileData.replace(QueryType, '#type => NewTypeToReplace')
+                # print(m)
+                fileToWrite.write(fileData)
+        Q_Push_File(node, 'logstash.conf', '/etc/logstash/conf.d/logstash.conf' )
+    except Exception as e:
+        print("error", e)
+
+    return 1
+
+
+
+
+##########################ICI on a quasiment que les modules pour le serveur principal
+def Q_Create_Certif(serv):
+    '''
+    Step : -Remove default certificate
+    - Gen rsa key
+    - Gen CSR
+    - remove passphrase so nginx can use it
+    - Gen selfsigned cert
+    - Duplicate to pem format.
+    :return:
+    '''
+    localpath = serv.certlocalpath
+
+    print('Generating certificate on localhost...\n')
+    print('Create directory :' + localpath)
+
+
+    if os.path.isdir(localpath):
+        print("Directory " + localpath + "already exist.")
+    else:
+        try:
+            stdin = Popen(['mkdir', localpath], stdout=PIPE)
+            stdout = stdin.communicate()[0]
+            if stdin.returncode != 0:
+                raise Exception("Problem on creating directory")
+        except Exception as e:
+            print("...Failed to create " + localpath + " : Directory (probably) already exist")
+    print('Removing default ssl certificate if present...\n')
+    try:
+        stdin = Popen(['rm', '/etc/nginx/ssl/server.key', '/etc/nginx/ssl/server.pem'], stdout=PIPE)
+        stdout = stdin.communicate()[0]
+        # print (stdout)
+        if stdin.returncode != 0:
+            raise Exception("Problem on removing default ssl certificate")
+    except Exception as e:
+        print("Error on removing server : ", e)
+
+    print("Creating all stuff\n")
+    try:
+        stdin = Popen(['openssl', 'req', '-nodes', '-new', '-x509', '-keyout', 'server.key',
+                       '-out', 'server.pem', '-days', '365', '-config', 'openssl.cnf']
+                      , cwd='CertTest/', stdout=PIPE)
+        stdout = stdin.communicate()[0]
+        if stdin.returncode != 0:
+            raise Exception("Problem on Doing the creating/Etc certificate")
+    except Exception as e:
+        print("Error on creating stuff : ", e)
+
+    # openssl
+    # req - new - x509 - keyout
+    # server.key - out
+    # server.pem - days
+    # 365 - config. / openssl.cnf
+    print('Copy file in /etc/nginx/ssl to be ready to use...\n')
+    try:
+        stdin = Popen(['cp', 'server.key', 'server.pem', '/etc/nginx/ssl/'], cwd='CertTest/', stdout=PIPE)
+        stdout = stdin.communicate()[0]
+        if stdin.returncode != 0:
+            raise Exception("Problem on copying file")
+    except Exception as e:
+        print("Error on copying file : ", e)
+
+
+def Q_Recup_Cert(node,serv):
     '''
     Récupère le certificat SSL du serveur central et l'installe.
     à voir si on utilise le module ou non
     :param node:
     :return:
     '''
-    remotepath = '/etc/logstash/cert'
-    while 1:
-        Rep = input('Do you need to push a certificate on the node ? (Y/n)')
-        if Rep.lower() in ('y','yes') :
-            try:
-                sftp = node.ssh.open_sftp()
-            except Exception as e:
-                print('Error:' + str(e))
+    remotepath = node.certremotepath
+    localpath = serv.certlocalpath
+    certPushed = False
+    putFile = False
 
-            print('Creating '+remotepath+'... at '+node.ip)
-            if sftp.chdir(remotepath) :
-                print('Directory already exist...')
-            else :
-                try :
-                    sftp.mkdir(remotepath)
+    print('Pushing Certificate on remote host...')
+    while not certPushed:
+        try:
+            sftp = node.ssh.open_sftp()
+        except Exception as e:
+            print('Error:' + str(e))
+        print('\nCreating '+remotepath+'... at '+node.ip +'...')
+
+        try :
+            sftp.mkdir(remotepath)
+        except Exception as e:
+            print("...Failed to create "+remotepath+" : Directory (probably) already exist")
+
+        print('\n Pushing file server.pem on remote host')
+        namefile= 'server.pem'
+
+        try :
+            if os.path.isfile(localpath+'server.pem'):
+                try:
+                    if sftp.stat(remotepath+'server.pem'):
+                        print('File already exist, Overriding it')
                 except Exception as e:
-                    print("Error on creating /etc/logstash/cert")
-            while 1 :
-                localpath = input('\nEnter certificate file on local host:')
-                if os.path.isfile(localpath):
-                    sftp.put(localpath,remotepath+'server.pem')
-                    # todo ssh.exec_command('sysctl -p') application de la conf à décommenter
-                    break
-                else :
-                    print('...No file found there')
-            break
-        else :
-            Rep.lower() in ('n','no')
-            break
+                    print('File does not exist,pushing server.pem...')
+                try:
+                    sftp.put(localpath+'server.pem', remotepath + namefile)
+                    print('...File succesfully pushed on remote host')
+                    certPushed = True
+                except Exception as e:
+                    print('error', e)
+                    print('Failed to put file on remote host')
+            else :
+                print('\n...No file found in : ' + localpath+'...')
+                    #Rep3 = input('...Do you need to stop this step (Push certificate) ? (Y/n)')
+        except Exception as e:
+            print('error ',e)
+            # Oui je sais la condition de la boucle sert à rien car j'ai fais des modifs
+            # Mais j'ai la flemme de tout dé indenter le code si j'enlève le while...
+            # j'ai déja enlevé 5 lignes là u_u
+        certPushed = True
+                    #Rep3 = input('Do you need to stop this step ? (Y/n)')
+                    #stdin, stdout, stderr = Popen('ls -l ' + localpath)
+                    #print(stdout.read().decode('utf-8'))
+            # if Rep3.lower() in ('y', 'yes'):
+            #     break
+
+
+
+
+
+
+def Q_Conf_Net_Int(serv) :
+    '''
+    Modification du fichier /etc/network/interfaces à partir du fichier oldConfInterfaces
+    :param serv:
+    :return:
+    '''
+    validIP = "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}" \
+              "([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"
+    ipAdmin, ipAlert = False, False
+    print('\nStarting Network interface configuration...(/etc/network/interfaces)')
+    while not ipAdmin:
+        admIP = input("Please enter server ip for administration (and remote access) : \n")
+        if re.search(validIP, admIP):
+            print('Updating ip address')
+            serv.up_ipad(admIP)
+            ipAdmin = True
+        else:
+            print('Adress ip not ok ...')
+
+    while not ipAlert:
+        alIP = input('Please enter server ip for alerting (can be the same than administration\'s one) : ')
+        if re.search(validIP, alIP):
+            print('updating ip address')
+            serv.up_ipal(alIP)
+            ipAlert = True
+        else:
+            print('Adress ip not ok ...')
+
+    ######################## Conf /etc/network/interfaces
+    print('Updating /etc/network/interfaces...')
+    QueryAl = '#AddressPutAlerteRe'
+    QueryAdm = '#AddressPutAdministration'
+    QueryGateway = 'Ici quand on aura le gateway on le changera :p et le dnsserver aussi tiens'
+    try:
+        stdin = Popen(['touch', 'confInterfaces'], stdout=PIPE)
+        stdout = stdin.communicate()[0]
+        with open('confInterfaces', 'w') as fileToWrite:
+            with open('oldConfInterfaces', 'r') as fileToRead:
+                # On modifie le fichier, il y a encore le
+                # netmask a modifier aussi
+                # le gateway
+                # le dns server
+                if serv.ipadministration == serv.ipalerte:
+                    fileData = fileToRead.read()
+                    fileData = fileData.replace(QueryAl, 'address ' + serv.ipalerte)
+                    fileData = fileData.replace('auto eth1\niface eth1 inet static\n', '')
+                else:
+                    fileData = fileToRead.read()
+                    fileData = fileData.replace(QueryAl, 'address ' + serv.ipalerte)
+                    fileData = fileData.replace(QueryAdm, 'address ' + serv.ipadministration)
+                # print(m)
+                fileToWrite.write(fileData)
+    except Exception as e:
+        print("error while updating file", e)
+
+    try:
+        stdin = Popen(['cp', 'confInterfaces', '/etc/network/interfacesTestScript'], stdout=PIPE)
+        stdout = stdin.communicate()[0]
+    except Exception as e:
+        print("error while modifying file (cp conf /etc/network/interfaces", e)
+
+#Todo : Modifier le fichier de configuration d'interface et le fichier hôte
+def Q_Conf_Host_File(serv):
+    print('\nHost file configuration...(/etc/hosts)')
+    return 1
+
+
+def Q_Disable_Service(serv):
+    '''
+        Désactive les services locaux dont on a pas besoin ( logstash et suricata )
+        :return:
+
+        Peut se transformer en code pour supprimer tout les services qu'on ne veut pas
+        à partir d'un fichier "service.txt" (comme pour package)... A voir :)
+    '''
+
+    suitecmd = ['service logstash stop',
+                'service suricata stop',
+                'update-rc.d logstash disable',
+                'update-rc.d suricata disable']
+    print('\nDisable useless service on local server : Logstash,Suricata...')
+    for cmd in suitecmd:
+        unservlog = Popen(cmd, stdout=PIPE)
+        stdout = unservlog.communicate()[0]
+        if unservlog.returncode != 0:
+            print(' Error while stopping Service')
+
+
+def Q_Disable_Ipv6_local(serv):
+        '''
+        Disable Ipv6 support on system (To avoid socket's type conflict)
+        :param node: Node on which, we disable ipv6 support
+        '''
+        ipv6Conf = '/etc/sysctl.conf'
+        Cmd = 'tail -n1 /etc/sysctl.conf'
+        ipv6IsDis = '#Ipv6 now Disabled\n'
+
+        # ATTENTION TODO : FAIRE LE DISABLE POUR CHAQUE CARTE ETHERNET A TERME
+        DisIpv6 = ['net.ipv6.conf.all.disable_ipv6=1\n',
+                   'net.ipv6.conf.default.disable_ipv6=1\n',
+                   'net.ipv6.conf.lo.disable_ipv6=1\n',
+                   'net.ipv6.conf.eth0.disable_ipv6=1\n',
+                   'net.ipv6.conf.eth1.disable_ipv6=1\n']
+
+        print('\nDisabling Ipv6 Support on local')
+        DisIpv6.append(ipv6IsDis)
+        try:
+            with open(ipv6Conf) as f:
+                tmp = f.read()
+                if ipv6IsDis in tmp:
+                    print('...Ipv6 is already disabled on the system')
+                else:
+                    with open(ipv6Conf, 'ab+') as file:
+                        for line in DisIpv6:
+                            #Un petit encore sinon le script râle... à check...
+                            file.write(line.encode('utf-8'))
+                        print('IPv6 Successfully Disabled on local')
+        except Exception as e:
+            print('Error while disabling ipv6 on local :' + str(e))
+
+        stdin = Popen(['sysctl', '-p'], stdout=PIPE)
+        stdout = stdin.communicate()[0]
+        if stdin.returncode != 0:
+            raise Exception('Problem on executing sysctl -p')
+
+#Todo : Push le fichier nginx en local
+def Q_Push_Nginx(server):
+    return 1
+
+
+#done :Création du fichier d'auth http
+def Q_Push_AuthHTTP(serv):
+    print('Authentification file creation...')
+    print('Installing apache2'
+          '-utils on the server...')
+    #Installation d'apache2-utils
+    try:
+        stdin = Popen(['apt-get', 'install', 'apache2-utils'], stdout=PIPE)
+        stdout = stdin.communicate()[0]
+        # print (stdout)
+        if stdin.returncode != 0:
+            raise Exception("Problem on installing apache2-utils")
+    except Exception as e:
+        print("Error on removing server : ", e)
+
+    # Création mot de passe et push htpasswd
+    serv.gen_pass()
+    try:
+        print('Htpass creation for node authentification')
+        print(serv.htpass)
+        stdin = Popen(['htpasswd', '-b', '-c', '/etc/nginx/sonde.htpasswd',
+                        serv.userHt, serv.htpass], stdout=PIPE)
+        stdout = stdin.communicate()[0]
+        # print (stdout)
+        if stdin.returncode != 0:
+            raise Exception("Problem on using htpasswd")
+    except Exception as e:
+        print("Error on htpasswd use : ", e)
+
+    try:
+        print('Modification on htpasswd conf')
+        stdin = Popen(['chmod', 'o-r', '/etc/nginx/sonde.htpasswd'], stdout=PIPE)
+        stdout = stdin.communicate()[0]
+        # print (stdout)
+        if stdin.returncode != 0:
+            raise Exception("Problem on using chmod")
+    except Exception as e:
+        print("Error on chmod use : ", e)
+
+
+
+# Todo : Mise en place du proxy
+def Q_Set_Proxy(serv):
+    print('\nSet Proxy in elasticsearch.conf...')
+    QueryAl = '#MyIPAlert'
+    try:
+        stdin = Popen(['touch', 'confProxy'], stdout=PIPE)
+        stdout = stdin.communicate()[0]
+        with open('confProxy', 'w') as fileToWrite:
+            with open('oldConfProxy', 'r') as fileToRead:
+                fileData = fileToRead.read()
+                fileData = fileData.replace(QueryAl, serv.ipalerte)
+                # print(m)
+                fileToWrite.write(fileData)
+    except Exception as e:
+        print("error while setting elasticsearch.conf", e)
+
+    stdin = Popen(['cp', 'confProxy','/etc/nginx/sites-available/elasticsearch.conf'], stdout=PIPE)
+    stdout = stdin.communicate()[0]
+    if stdin.returncode != 0:
+        raise Exception('Problem on executing sysctl -p')
+
 
 
 def Q_Changement_Nom_Sonde(node):
@@ -647,52 +988,135 @@ def Q_Changement_Nom_Sonde(node):
     :return:
     '''
 
-def Q_Configuration_Sonde(node):
 
-    return 1
+
+def Q_Conf_Central(serv):
+    '''
+    Toutes les configurations à faire sur le serveur central répartis dans les différents modules
+    :param serv:
+    :return:
+    '''
+    print ("\n------Main Server Configuration------ ")
+    #Q_Conf_Net_Int(serv) todo and check with yo
+    #Q_Conf_Host_File(serv)
+    while 1:
+        nom = input('Main server name : ')
+        rep = input('Confirm main server name :'+nom+' (Y/n)')
+        if rep.lower in ('y','yes','o','oui'):
+            serv.change_name(nom)
+            break
+    #todo (need dns gateway etc...) Q_Conf_Net_Int()
+    Q_Disable_Service(serv)
+    Q_Disable_Ipv6_local(serv)
+    Q_Create_Certif(serv)
+    #todo Q_Push_Nginx(serv)
+    Q_Push_AuthHTTP(serv)
+    Q_Set_Proxy(serv)
+
 
 if __name__ == '__main__':
 
-    nodeS = []
-    print (" \n------IDS Probe configuration Script------ \n")
-
-    #Création du certificat ssh
-    Pass = Q_Key_Gen('/root/.ssh/id_rsa')
-    #Si jamais on veut imprimer la création de la random image supprimer le commentaire suivant
-    #print (Pass)
-
-    #Récupération du nombre de nodes à configurer
-    nbNode = Q_Creation_Node()
-
-    #Création de nos nodes
-    for i in range(nbNode) :
-        #n.add_user(i)
-        #print (n.user)
-        n = node.Node(i)
-        Q_First_Con(i,n)
-        stdin, stdout, stderr = n.ssh.exec_command('echo "haha" >> haha.txt')
-        nodeS.append(n)
-
-    #Préparer le système sur nos nodes (les paquets de base)
-    for i in range(len(nodeS)):
-        Q_Prepping_System(nodeS[i])
-        Q_Update(nodeS[i])
-        Q_Disable_Ipv6(nodeS[i])
-        Q_Install_Suricata(nodeS[i])
-        Q_Install_Logstash(nodeS[i])
-
-    #Q_Preppin_System()
-
-    ## Ligne de test voir si nos attributs de nodes sont bien enregistré
-    # for i in range(len(nodeS)):
-    #     ssh = paramiko.SSHClient()
-    #     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    #     ssh.connect('10.0.0.5', username=nodeS[i].user, password=nodeS[i].passw)
-    #     #print("connexion test... Check")
-    #     ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('echo hihiiii >> /home/debuser/haha')
-    #     #nodeS.append(node)
+    parser = argparse.ArgumentParser(description='This is a Script to help in the process of '
+                                                 'deploying node in an IDS/IPS environment')
+    parser.add_argument("-F", "-f", "--full", help="Launch the whole Installing process"
+                        , action="store_true")
+    parser.add_argument("-s", "--suricata", help="Launch Suricata Installer"
+                        , action="store_true")
+    parser.add_argument("-cs", "--checksuricata", help="Launch Suricata Checker"
+                        , action="store_true")
+    parser.add_argument("-l", "--logstash", help="Launch Logstash Installer"
+                        , action="store_true")
+    parser.add_argument("-cl", "--checklogstash", help="Launch Logstash Checker"
+                        , action="store_true")
+    parser.add_argument("-pk", "--pushkey", help="Push a key on a remote Host - "
+                                    "Require a key in id_rsa,an User and A Password"
+                        , action="store_true")
 
 
-    #keygen = C_key_gen()
-    #keygen.communicate()[0]
+    args = parser.parse_args()
+
+    if len(sys.argv) < 2:
+        parser.print_help()
+        sys.exit(1)
+
+    if args.full:
+        nodeS = []
+        serv = server.Server()
+        print(" \n------IDS/IPS Solution Probe configuration Script------ \n")
+
+        # Création du certificat ssh
+        Pass = Q_Key_Gen('/root/.ssh/id_rsa')
+        # Si jamais on veut imprimer la création de la random image supprimer le commentaire suivant
+        # print (Pass)
+
+        # Récupération du nombre de nodes à configurer
+        nbNode = Q_Creation_Node()
+
+        # Création de nos nodes
+        for i in range(nbNode):
+            # n.add_user(i)
+            # print (n.user)
+            n = node.Node(i)
+            Q_First_Con(i, n, True)
+            #stdin, stdout, stderr = n.ssh.exec_command('echo "haha" >> haha.txt')
+            nodeS.append(n)
+
+        Q_Conf_Central(serv)
+
+        # Préparer le système sur nos nodes (les paquets de base)
+        for i in range(len(nodeS)):
+            Q_Prepping_System(nodeS[i])
+            Q_Update(nodeS[i])
+            Q_Disable_Ipv6(nodeS[i])
+            Q_Install_Suricata(nodeS[i])
+            Q_Install_Logstash(nodeS[i])
+            Q_Recup_Cert(nodeS[i],serv)
+            # Q_Preppin_System()
+
+            ## Ligne de test voir si nos attributs de nodes sont bien enregistré
+            # for i in range(len(nodeS)):
+            #     ssh = paramiko.SSHClient()
+            #     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            #     ssh.connect('10.0.0.5', username=nodeS[i].user, password=nodeS[i].passw)
+            #     #print("connexion test... Check")
+            #     ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('echo hihiiii >> /home/debuser/haha')
+            #     #nodeS.append(node)
+
+
+            # keygen = C_key_gen()
+            # keygen.communicate()[0]
+    if args.suricata:
+        n = node.Node(1)
+        Q_First_Con(1,n,False)
+        Q_Update(n)
+        Q_Install_Suricata(n)
+        print('Launch Suricata Install')
+
+    if args.checksuricata:
+        n = node.Node(1)
+        Q_First_Con(1, n, False)
+        Q_Update(n)
+        Q_Check_Suricata(n)
+        print('Launch Suricata check install')
+
+    if args.logstash:
+        n = node.Node(1)
+        Q_First_Con(1,n,False)
+        Q_Update(n)
+        Q_Install_Logstash(n)
+        print('Launch logstash install')
+
+    if args.checklogstash:
+        n = node.Node(1)
+        Q_First_Con(1,n,False)
+        Q_Update(n)
+        Q_Check_Logstash(n)
+        print('Launch logstash check install')
+
+    if args.pushkey:
+        n= node.Node(1)
+        Q_First_Con(1,n,True)
+        print('Launch pushing key on remote host (First_Con do the job)')
+
+
 
