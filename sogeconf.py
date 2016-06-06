@@ -628,7 +628,7 @@ def Q_Check_Logstash(node):
         return False, 'Bug on Logstash check'
 
 
-def Q_Configuration_Logstash(node):
+def Q_Configuration_Logstash(node,serv):
     '''
     Ici on va push le fichier logstash.conf modifié pour chaque sonde sur notre serveur
 
@@ -638,6 +638,7 @@ def Q_Configuration_Logstash(node):
     QueryType = '#type => sondeNameToReplace'
     QueryName = '#user => UserNameToReplace'
     QueryPassword = '#password => PasswordToReplace'
+    QueryNodeName = '#type => sondeNameToReplace'
     try:
         stdin = Popen(['touch', 'logstash.conf'], stdout=PIPE)
         stdout = stdin.communicate()[0]
@@ -647,19 +648,43 @@ def Q_Configuration_Logstash(node):
                 # ou parcourir le fichier line by line, et modifier en fonction :p
                 # oldfile = file.read()
                 fileData = fileToRead.read()
-                fileData = fileData.replace(QueryPassword, '#password => NewPasswordToReplace')
-                fileData = fileData.replace(QueryName, '#user => NewUSerNameToReplace')
-                fileData = fileData.replace(QueryType, '#type => NewTypeToReplace')
+                fileData = fileData.replace(QueryPassword, serv.htpass)
+                fileData = fileData.replace(QueryName, serv.userHt)
+                fileData = fileData.replace(QueryType, serv.nom)
+                #node.get_hostname récupère le nom de la sonde sur le serveur
+                fileData = fileData.replace(QueryNodeName, node.get_hostname())
                 # print(m)
                 fileToWrite.write(fileData)
         Q_Push_File(node, 'logstash.conf', '/etc/logstash/conf.d/logstash.conf' )
     except Exception as e:
         print("error", e)
 
-    return 1
 
-
-
+#Oui tout ça pour changer une petite ligne dans /etc/default/logstash...
+#J'en aurais presque honte ...
+def Q_Opt_Reboot_Log(node):
+    sftp = n.ssh.open_sftp()
+    try:
+        stdin = Popen(['touch', 'tmpFile'], stdout=PIPE)
+        stdout = stdin.communicate()[0]
+        if stdin.returncode != 0:
+            print('error on touch tmpFile')
+        tmp = open('tmpFile', 'w')
+        with sftp.open('/etc/default/logstash', 'r') as f:
+            for line in f:
+                if '#KILL_ON_STOP_TIMEOUT=0' in line:
+                    tmp.write('KILL_ON_STOP_TIMEOUT=1\n')
+                else:
+                    tmp.write(line)
+        tmp.close()
+    except Exception as e:
+        print('error', e)
+    try:
+        sftp.put('tmpFile', '/etc/default/logstash')
+    except Exception as e:
+        print('Error while pushing file on remote host :' + str(e))
+    stdin = Popen(['rm', 'tmpFile'], stdout=PIPE)
+    stdout = stdin.communicate()[0]
 
 ##########################ICI on a quasiment que les modules pour le serveur principal
 def Q_Create_Certif(serv):
@@ -862,16 +887,31 @@ def Q_Disable_Service(serv):
         à partir d'un fichier "service.txt" (comme pour package)... A voir :)
     '''
 
-    suitecmd = ['service logstash stop',
-                'service suricata stop',
-                'update-rc.d logstash disable',
-                'update-rc.d suricata disable']
+    suitecmdS = ['service suricata stop'
+                ,'update-rc.d suricata disable']
+    suitecmdL = ['service logstash stop',
+                 'update-rc.d logstash disable']
     print('\nDisable useless service on local server : Logstash,Suricata...')
-    for cmd in suitecmd:
-        unservlog = Popen(cmd, stdout=PIPE)
-        stdout = unservlog.communicate()[0]
-        if unservlog.returncode != 0:
-            print(' Error while stopping Service')
+    if os.path.isdir('/etc/logstash'):
+        for cmd in suitecmdL:
+            unservlog = Popen(cmd, stdout=PIPE)
+            stdout = unservlog.communicate()[0]
+            if unservlog.returncode != 0:
+                print(' Error while stopping Service')
+    remoteCmd = 'suricata | head -n1'
+    try:
+        stdin = Popen(remoteCmd,stdout = PIPE)
+        stdout = stdin.communicate()[0]
+        if stdin.returncode != 0:
+            print('Error on checking suricata')
+        else :
+            for cmd in suitecmdS:
+                unservlog = Popen(cmd, stdout=PIPE)
+                stdout = unservlog.communicate()[0]
+                if unservlog.returncode != 0:
+                    print(' Error while stopping Service')
+    except Exception as e :
+        print('Suricata not installed on server')
 
 
 def Q_Disable_Ipv6_local(serv):
@@ -976,18 +1016,18 @@ def Q_Set_Proxy(serv):
     stdin = Popen(['cp', 'confProxy','/etc/nginx/sites-available/elasticsearch.conf'], stdout=PIPE)
     stdout = stdin.communicate()[0]
     if stdin.returncode != 0:
-        raise Exception('Problem on executing sysctl -p')
+        raise Exception('Problem on executing copy')
+    #On active la configuration et on redémarre Nginx
+    stdin = Popen(['ln', '-s', '/etc/nginx/sites-available/elasticsearch.conf',
+                   '/etc/nginx/sites-enabled'], stdout=PIPE)
+    stdout = stdin.communicate()[0]
+    if stdin.returncode != 0:
+        raise Exception('Problem on enabling Nginx')
 
-
-
-def Q_Changement_Nom_Sonde(node):
-    '''
-    à voir mais en théorie le nom de changement de sonde se fait sur
-    le fichier logstash.conf donc autant le push directement
-    :param node:
-    :return:
-    '''
-
+    stdin = Popen(['service', 'nginx', 'reload'], stdout=PIPE)
+    stdout = stdin.communicate()[0]
+    if stdin.returncode != 0:
+        raise Exception('Problem on reloading Nginx')
 
 
 def Q_Conf_Central(serv):
@@ -997,22 +1037,24 @@ def Q_Conf_Central(serv):
     :return:
     '''
     print ("\n------Main Server Configuration------ ")
-    #Q_Conf_Net_Int(serv) todo and check with yo
-    #Q_Conf_Host_File(serv)
-    while 1:
+    #Q_Conf_Host_File(serv) A priori pas besoin ?
+    noName = False
+    while not noName:
         nom = input('Main server name : ')
         rep = input('Confirm main server name :'+nom+' (Y/n)')
-        if rep.lower in ('y','yes','o','oui'):
+        if rep.lower() in ('y','yes','o','oui'):
             serv.change_name(nom)
-            break
-    #todo (need dns gateway etc...) Q_Conf_Net_Int()
+            noName = True
+    #todo (need dns gateway etc...) Q_Conf_Net_Int() Mais sinon ya quasiment tout de fait :3
+    #todo -> done : mettre un check sur logstash et suricata pour :
     Q_Disable_Service(serv)
     Q_Disable_Ipv6_local(serv)
     Q_Create_Certif(serv)
-    #todo Q_Push_Nginx(serv)
+    #todo Q_Push_Nginx(serv)  c'est le fichier /etc/nginx/nginx.conf ajouter la ligne client
+    # client_max_body_size ... a voir
     Q_Push_AuthHTTP(serv)
     Q_Set_Proxy(serv)
-
+    #ADD PART 4.2.7 from nils docs
 
 if __name__ == '__main__':
 
@@ -1062,8 +1104,10 @@ if __name__ == '__main__':
             nodeS.append(n)
 
         Q_Conf_Central(serv)
+        # Pour les sondes il y aussi la configuration de /etc/network/interfaces et du fichier host
+        #à faire
 
-        # Préparer le système sur nos nodes (les paquets de base)
+        # Préparer le système sur nos nodes
         for i in range(len(nodeS)):
             Q_Prepping_System(nodeS[i])
             Q_Update(nodeS[i])
@@ -1071,7 +1115,10 @@ if __name__ == '__main__':
             Q_Install_Suricata(nodeS[i])
             Q_Install_Logstash(nodeS[i])
             Q_Recup_Cert(nodeS[i],serv)
-            # Q_Preppin_System()
+            Q_Configuration_Logstash(nodeS[i],serv)
+            Q_Opt_Reboot_Log(nodeS[i])
+            #Peut être le service elasticsearch à désactiver (je crois pas l'avoir fait)
+            #mais c'est deux commandes rapide
 
             ## Ligne de test voir si nos attributs de nodes sont bien enregistré
             # for i in range(len(nodeS)):

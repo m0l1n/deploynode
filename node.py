@@ -17,9 +17,7 @@ class Node:
         self.numEth = 1
         self.certlocalpath = './CertTest/'
         self.certremotepath = '/etc/logstash/cert/'
-        self.nomServCentral = 'sond-cent'
-        self.ipalerte = '10.200.0.20'
-        self.ipadministration = '10.200.0.21'
+        self.hostname =''
 
     def add_user(self,user):
         self.user = user
@@ -43,6 +41,11 @@ class Node:
         self.ssh = paramiko.SSHClient()
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.ssh.connect(ip, username=usr)
+
+    def get_hostname(self):
+        stdin, stdout, stderr = self.ssh.exec_command('echo $HOSTNAME')
+        self.hostname = stdout.read().decode()
+        return self.hostname
 
     def change_name(self,name):
         self.nomsonde = name

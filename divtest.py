@@ -9,7 +9,7 @@ import argparse
 from subprocess import Popen,PIPE,call
 import os
 import server
-
+import socket
 
 
 # parser = argparse.ArgumentParser(description='This is a test')
@@ -33,6 +33,7 @@ import server
 #Let keep it there cuz I m too lazy to remove ! :p
 
 n = node.Node(1)
+n.ssh_init('10.0.0.5','root')
 serv = server.Server()
 
 # validIP = "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}" \
@@ -90,52 +91,97 @@ serv = server.Server()
 # except Exception as e:
 #     print("error while modifying file (cp conf /etc/network/interfaces", e)
 
-print('\nSet Proxy in elasticsearch.conf...')
-QueryAl = '#MyIPAlert'
+# print('\nSet Proxy in elasticsearch.conf...')
+# QueryAl = '#MyIPAlert'
+# try:
+#     stdin = Popen(['touch', 'confProxy'], stdout=PIPE)
+#     stdout = stdin.communicate()[0]
+#     with open('confProxy', 'w') as fileToWrite:
+#         with open('oldConfProxy', 'r') as fileToRead:
+#             fileData = fileToRead.read()
+#             fileData = fileData.replace(QueryAl, serv.ipalerte)
+#             # print(m)
+#             fileToWrite.write(fileData)
+# except Exception as e:
+#     print("error while updating file", e)
+#
+#
+
+sftp = n.ssh.open_sftp()
 try:
-    stdin = Popen(['touch', 'confProxy'], stdout=PIPE)
+    stdin = Popen(['touch','tmpFile'],stdout = PIPE)
     stdout = stdin.communicate()[0]
-    with open('confProxy', 'w') as fileToWrite:
-        with open('oldConfProxy', 'r') as fileToRead:
-            fileData = fileToRead.read()
-            fileData = fileData.replace(QueryAl, serv.ipalerte)
-            # print(m)
-            fileToWrite.write(fileData)
+    if stdin.returncode != 0 :
+        print('error on touch tmpFile')
+    tmp = open('tmpFile','w')
+    with sftp.open('/etc/default/logstash', 'r') as f:
+        for line in f:
+            if '#KILL_ON_STOP_TIMEOUT=0' in line :
+                tmp.write('KILL_ON_STOP_TIMEOUT=1\n')
+            else :
+                tmp.write(line)
+    # tmp.close()
+    # stdin = Popen(['rm', 'tmp'], stdout=PIPE)
+    # stdout = stdin.communicate()[0]
+    tmp.close()
 except Exception as e:
-    print("error while updating file", e)
+    print('error',e)
 
+try:
+    sftp.put('tmpFile', '/etc/default/logstash')
+except Exception as e:
+    print('Error while pushing file on remote host :' + str(e))
 
-if True:
-    ipv6Conf = '/etc/sysctl.conf'
-    Cmd = 'tail -n1 /etc/sysctl.conf'
-    ipv6IsDis = '#Ipv6 now Disabled\n'
+stdin = Popen(['rm', 'tmpFile'], stdout=PIPE)
+stdout = stdin.communicate()[0]
 
-    # ATTENTION TODO : FAIRE LE DISABLE POUR CHAQUE CARTE ETHERNET A TERME
-    DisIpv6 = ['net.ipv6.conf.all.disable_ipv6=1\n',
-               'net.ipv6.conf.default.disable_ipv6=1\n',
-               'net.ipv6.conf.lo.disable_ipv6=1\n',
-               'net.ipv6.conf.eth0.disable_ipv6=1\n',
-               'net.ipv6.conf.eth1.disable_ipv6=1\n']
-
-    print('\nDisabling Ipv6 Support on local')
-    DisIpv6.append(ipv6IsDis)
-    try:
-        with open(ipv6Conf) as f:
-            tmp = f.read()
-            if ipv6IsDis in tmp:
-                print('...Ipv6 is already disabled on the system')
-            else:
-                with open(ipv6Conf, 'ab+') as file :
-                    for line in DisIpv6:
-                        file.write(line.encode('utf-8'))
-                    print('IPv6 Successfully Disabled on local')
-    except Exception as e:
-        print('Error while disabling ipv6 on local :' + str(e))
-
-    stdin = Popen(['sysctl', '-p'], stdout=PIPE)
-    stdout = stdin.communicate()[0]
-    if stdin.returncode != 0:
-        raise Exception('Problem on executing sysctl -p')
+# remoteCmd = 'suricata | head -n1'
+# try:
+#     stdin = Popen(['echo','$HOSTNAME'],stdout = PIPE)
+#     stdout = stdin.communicate()[0]
+#     print(stdout.decode())
+#     if stdin.returncode != 0 :
+#         print ('oups')
+# except Exception as e :
+#     print('that error :',e)
+#
+# print(socket.gethostbyaddr(socket.gethostname())[0])
+#
+#
+# n.ssh_init('10.0.0.5', 'root')
+# stdin,stdout,stderr = n.ssh.exec_command('echo $HOSTNAME')
+# print(stdout.read().decode())
+# if True:
+#     ipv6Conf = '/etc/sysctl.conf'
+#     Cmd = 'tail -n1 /etc/sysctl.conf'
+#     ipv6IsDis = '#Ipv6 now Disabled\n'
+#
+#     # ATTENTION TODO : FAIRE LE DISABLE POUR CHAQUE CARTE ETHERNET A TERME
+#     DisIpv6 = ['net.ipv6.conf.all.disable_ipv6=1\n',
+#                'net.ipv6.conf.default.disable_ipv6=1\n',
+#                'net.ipv6.conf.lo.disable_ipv6=1\n',
+#                'net.ipv6.conf.eth0.disable_ipv6=1\n',
+#                'net.ipv6.conf.eth1.disable_ipv6=1\n']
+#
+#     print('\nDisabling Ipv6 Support on local')
+#     DisIpv6.append(ipv6IsDis)
+#     try:
+#         with open(ipv6Conf) as f:
+#             tmp = f.read()
+#             if ipv6IsDis in tmp:
+#                 print('...Ipv6 is already disabled on the system')
+#             else:
+#                 with open(ipv6Conf, 'ab+') as file :
+#                     for line in DisIpv6:
+#                         file.write(line.encode('utf-8'))
+#                     print('IPv6 Successfully Disabled on local')
+#     except Exception as e:
+#         print('Error while disabling ipv6 on local :' + str(e))
+#
+#     stdin = Popen(['sysctl', '-p'], stdout=PIPE)
+#     stdout = stdin.communicate()[0]
+#     if stdin.returncode != 0:
+#         raise Exception('Problem on executing sysctl -p')
 # localpath = n.certlocalpath
 # if True :
 #     print('Generating certificate on localhost..')
