@@ -723,16 +723,27 @@ def Q_Create_Certif(serv):
     except Exception as e:
         print("Error on removing server : ", e)
 
-    print("Creating all stuff\n")
+    print("Creating all stuff (certificate)\n")
     try:
         stdin = Popen(['openssl', 'req', '-nodes', '-new', '-x509', '-keyout', 'server.key',
-                       '-out', 'server.pem', '-days', '365', '-config', 'openssl.cnf']
+                       '-out', 'server.crt', '-days', '365', '-config', 'openssl.cnf']
                       , cwd='CertTest/', stdout=PIPE)
         stdout = stdin.communicate()[0]
         if stdin.returncode != 0:
             raise Exception("Problem on Doing the creating/Etc certificate")
     except Exception as e:
         print("Error on creating stuff : ", e)
+
+    try:
+        stdin = Popen(['openssl', 'x509', '-in', 'server.crt', '-out', 'server.pem',
+                       '-outform', 'PEM']
+                      , cwd='CertTest/', stdout=PIPE)
+        stdout = stdin.communicate()[0]
+        if stdin.returncode != 0:
+            raise Exception("Problem on duplicating certificate at pem format")
+    except Exception as e:
+        print("Error on creating stuff : ", e)
+
 
     # openssl
     # req - new - x509 - keyout
@@ -963,7 +974,7 @@ def Q_Push_AuthHTTP(serv):
           '-utils on the server...')
     #Installation d'apache2-utils
     try:
-        stdin = Popen(['apt-get', 'install', 'apache2-utils'], stdout=PIPE)
+        stdin = Popen(['apt-get', 'install','-y', 'apache2-utils'], stdout=PIPE)
         stdout = stdin.communicate()[0]
         # print (stdout)
         if stdin.returncode != 0:
@@ -1047,7 +1058,7 @@ def Q_Conf_Central(serv):
             noName = True
     #todo (need dns gateway etc...) Q_Conf_Net_Int() Mais sinon ya quasiment tout de fait :3
     #todo -> done : mettre un check sur logstash et suricata pour :
-    Q_Disable_Service(serv)
+    #Q_Disable_Service(serv)
     Q_Disable_Ipv6_local(serv)
     Q_Create_Certif(serv)
     #todo Q_Push_Nginx(serv)  c'est le fichier /etc/nginx/nginx.conf ajouter la ligne client
