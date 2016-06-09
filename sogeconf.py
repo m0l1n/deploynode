@@ -284,7 +284,7 @@ def Q_Prepping_System(node) :
         print('Connexion at  ' + node.ip + ' for package installation...')
         #INSTALL PACKAGE
         #Q_Install_Oracle(node)
-        print("\nInstalling package on node, please wait...")
+        print("\nInstalling package on node with :\n"+cmd+" \nplease wait...")
         try :
             #ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command(cmd)
             ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command(cmd)
@@ -588,10 +588,10 @@ def Q_Install_Logstash(node):
                 #print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
 
                 #ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command('rm /var/cache/apt/archives/lock')
-                ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command('apt-get update &&'+cmdInst)
+                ssh_stdin, ssh_stdout, ssh_stderr = node.ssh.exec_command('apt-get update && '+cmdInst)
                 print("exit:" + str(ssh_stdout.channel.recv_exit_status()))
-                #print(stdout.read().decode('utf-8'))
-                print(ssh_stderr.read().decode('utf-8'))
+                print(ssh_stdout.read().decode('utf-8'))
+                #print(ssh_stderr.read().decode('utf-8'))
                 #ssh2.prompt()
                 print("...Done")
             except Exception as e:
@@ -638,23 +638,29 @@ def Q_Configuration_Logstash(node,serv):
     QueryType = '#type => sondeNameToReplace'
     QueryName = '#user => UserNameToReplace'
     QueryPassword = '#password => PasswordToReplace'
-    QueryNodeName = '#type => sondeNameToReplace'
+    QueryNodeName = '#host => HostNameToReplace'
+    print ('Pushing modified logstash.conf for each node on our server')
     try:
         stdin = Popen(['touch', 'logstash.conf'], stdout=PIPE)
         stdout = stdin.communicate()[0]
         with open('logstash.conf', 'w') as fileToWrite:
             with open('oldlogstash.conf', 'r') as fileToRead:
-                # Ici disctuter de la méthode la plus propre enbtre faire un re.match et re.remplace
+                # Ici disctuter de la méthode la plus propre entre faire un re.match et re.remplace
                 # ou parcourir le fichier line by line, et modifier en fonction :p
                 # oldfile = file.read()
                 fileData = fileToRead.read()
+                print ('Replace Password')
                 fileData = fileData.replace(QueryPassword, serv.htpass)
+                print ('Replace userName with: '+serv.userHt)
                 fileData = fileData.replace(QueryName, serv.userHt)
+                print ('Replace sondeName with: '+serv.nom)
                 fileData = fileData.replace(QueryType, serv.nom)
                 #node.get_hostname récupère le nom de la sonde sur le serveur
+                print ('Replace hostName with: '+node.get_hostname())
                 fileData = fileData.replace(QueryNodeName, node.get_hostname())
                 # print(m)
                 fileToWrite.write(fileData)
+        print ('Pushing new logstash.conf on node')
         Q_Push_File(node, 'logstash.conf', '/etc/logstash/conf.d/logstash.conf' )
     except Exception as e:
         print("error", e)
@@ -663,7 +669,8 @@ def Q_Configuration_Logstash(node,serv):
 #Oui tout ça pour changer une petite ligne dans /etc/default/logstash...
 #J'en aurais presque honte ...
 def Q_Opt_Reboot_Log(node):
-    sftp = n.ssh.open_sftp()
+    sftp = node.ssh.open_sftp()
+    print('Editing /etc/default/logstash')
     try:
         stdin = Popen(['touch', 'tmpFile'], stdout=PIPE)
         stdout = stdin.communicate()[0]
@@ -685,6 +692,9 @@ def Q_Opt_Reboot_Log(node):
         print('Error while pushing file on remote host :' + str(e))
     stdin = Popen(['rm', 'tmpFile'], stdout=PIPE)
     stdout = stdin.communicate()[0]
+    if stdin.returncode != 0:
+        print('error on removing tmpFile')
+    print('Editing Done')
 
 ##########################ICI on a quasiment que les modules pour le serveur principal
 def Q_Create_Certif(serv):
@@ -752,7 +762,7 @@ def Q_Create_Certif(serv):
     # 365 - config. / openssl.cnf
     print('Copy file in /etc/nginx/ssl to be ready to use...\n')
     try:
-        stdin = Popen(['cp', 'server.key', 'server.pem', '/etc/nginx/ssl/'], cwd='CertTest/', stdout=PIPE)
+        stdin = Popen(['cp', 'server.key' , 'server.crt', 'server.pem', '/etc/nginx/ssl/'], cwd='CertTest/', stdout=PIPE)
         stdout = stdin.communicate()[0]
         if stdin.returncode != 0:
             raise Exception("Problem on copying file")
@@ -769,48 +779,48 @@ def Q_Recup_Cert(node,serv):
     '''
     remotepath = node.certremotepath
     localpath = serv.certlocalpath
-    certPushed = False
+    #CertPushed = False
     putFile = False
 
     print('Pushing Certificate on remote host...')
-    while not certPushed:
-        try:
-            sftp = node.ssh.open_sftp()
-        except Exception as e:
-            print('Error:' + str(e))
-        print('\nCreating '+remotepath+'... at '+node.ip +'...')
+    #while not certPushed:
+    try:
+        sftp = node.ssh.open_sftp()
+    except Exception as e:
+        print('Error:' + str(e))
+    print('\nCreating '+remotepath+'... at '+node.ip +'...')
 
-        try :
-            sftp.mkdir(remotepath)
-        except Exception as e:
-            print("...Failed to create "+remotepath+" : Directory (probably) already exist")
+    try :
+        sftp.mkdir(remotepath)
+    except Exception as e:
+        print("...Failed to create "+remotepath+" : Directory (probably) already exist")
 
-        print('\n Pushing file server.pem on remote host')
-        namefile= 'server.pem'
+    print('\n Pushing file server.pem on remote host')
+    namefile= 'server.pem'
 
-        try :
-            if os.path.isfile(localpath+'server.pem'):
-                try:
-                    if sftp.stat(remotepath+'server.pem'):
-                        print('File already exist, Overriding it')
-                except Exception as e:
-                    print('File does not exist,pushing server.pem...')
-                try:
-                    sftp.put(localpath+'server.pem', remotepath + namefile)
-                    print('...File succesfully pushed on remote host')
-                    certPushed = True
-                except Exception as e:
-                    print('error', e)
-                    print('Failed to put file on remote host')
-            else :
-                print('\n...No file found in : ' + localpath+'...')
+    try :
+        if os.path.isfile(localpath+'server.pem'):
+            try:
+                if sftp.stat(remotepath+'server.pem'):
+                    print('File already exist, Overriding it')
+            except Exception as e:
+                print('File does not exist,pushing server.pem...')
+            try:
+                sftp.put(localpath+'server.pem', remotepath + namefile)
+                print('...File succesfully pushed on remote host')
+                # certPushed = True
+            except Exception as e:
+                print('error', e)
+                print('Failed to put file on remote host')
+        else :
+            print('\n...No file found in : ' + localpath+'...')
                     #Rep3 = input('...Do you need to stop this step (Push certificate) ? (Y/n)')
-        except Exception as e:
-            print('error ',e)
+    except Exception as e:
+        print('error ',e)
             # Oui je sais la condition de la boucle sert à rien car j'ai fais des modifs
             # Mais j'ai la flemme de tout dé indenter le code si j'enlève le while...
             # j'ai déja enlevé 5 lignes là u_u
-        certPushed = True
+        #certPushed = True
                     #Rep3 = input('Do you need to stop this step ? (Y/n)')
                     #stdin, stdout, stderr = Popen('ls -l ' + localpath)
                     #print(stdout.read().decode('utf-8'))
@@ -1013,6 +1023,8 @@ def Q_Set_Proxy(serv):
     print('\nSet Proxy in elasticsearch.conf...')
     QueryAl = '#MyIPAlert'
     try:
+        stdin = Popen(['rm','/etc/nginx/sites-enabled/elasticsearch.conf'],stdout=PIPE)
+        stdout = stdin.communicate()[0]
         stdin = Popen(['touch', 'confProxy'], stdout=PIPE)
         stdout = stdin.communicate()[0]
         with open('confProxy', 'w') as fileToWrite:
@@ -1071,7 +1083,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='This is a Script to help in the process of '
                                                  'deploying node in an IDS/IPS environment')
-    parser.add_argument("-F", "-f", "--full", help="Launch the whole Installing process"
+    parser.add_argument("-F", "-f", "--full", help="Launch the whotalling process"
                         , action="store_true")
     parser.add_argument("-s", "--suricata", help="Launch Suricata Installer"
                         , action="store_true")
@@ -1125,9 +1137,9 @@ if __name__ == '__main__':
             Q_Disable_Ipv6(nodeS[i])
             Q_Install_Suricata(nodeS[i])
             Q_Install_Logstash(nodeS[i])
-            Q_Recup_Cert(nodeS[i],serv)
             Q_Configuration_Logstash(nodeS[i],serv)
             Q_Opt_Reboot_Log(nodeS[i])
+            Q_Recup_Cert(nodeS[i],serv)
             #Peut être le service elasticsearch à désactiver (je crois pas l'avoir fait)
             #mais c'est deux commandes rapide
 
